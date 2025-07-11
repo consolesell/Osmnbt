@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Deriv Trading Bot</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1><i class="fas fa-robot"></i> Advanced Deriv Trading Bot</h1>
+            <div class="connection-status">
+                <span id="connection-status">Disconnected</span>
+                <div class="status-indicator" id="status-indicator"></div>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Configuration Panel -->
+            <div class="panel config-panel">
+                <h3><i class="fas fa-cog"></i> Configuration</h3>
+                <div class="config-section">
+                    <label for="app-id">App ID:</label>
+                    <input type="number" id="app-id" value="1089" placeholder="Enter your app ID">
+                    
+                    <label for="api-token">API Token:</label>
+                    <input type="password" id="api-token" placeholder="Enter your API token">
+                    
+                    <button id="connect-btn" class="primary-btn">
+                        <i class="fas fa-plug"></i> Connect
+                    </button>
+                </div>
+            </div>
+
+            <!-- Strategy Panel -->
+            <div class="panel strategy-panel">
+                <h3><i class="fas fa-chart-line"></i> Trading Strategy</h3>
+                <div class="strategy-section">
+                    <label for="strategy-select">Strategy:</label>
+                    <select id="strategy-select">
+                        <option value="martingale">Martingale</option>
+                        <option value="dalembert">D'Alembert</option>
+                        <option value="trend-follow">Trend Following</option>
+                        <option value="mean-reversion">Mean Reversion</option>
+                        <option value="rsi-strategy">RSI Strategy</option>
+                        <option value="grid">Grid Trading</option>
+                        <option value="arbitrage">Arbitrage</option>
+                        <option value="ml-based">ML-Based</option>
+                        <option value="custom">Custom</option>
+                    </select>
+
+                    <label for="symbols">Symbols (Multi-select):</label>
+                    <select id="symbols" multiple>
+                        <option value="R_10" selected>Volatility 10 Index</option>
+                        <option value="R_25">Volatility 25 Index</option>
+                        <option value="R_50">Volatility 50 Index</option>
+                        <option value="R_75">Volatility 75 Index</option>
+                        <option value="R_100">Volatility 100 Index</option>
+                        <option value="1HZ10V">Volatility 10 (1s) Index</option>
+                        <option value="1HZ25V">Volatility 25 (1s) Index</option>
+                        <option value="1HZ50V">Volatility 50 (1s) Index</option>
+                        <option value="1HZ75V">Volatility 75 (1s) Index</option>
+                        <option value="1HZ100V">Volatility 100 (1s) Index</option>
+                    </select>
+
+                    <label for="trade-type">Trade Type:</label>
+                    <select id="trade-type">
+                        <option value="CALL">Higher</option>
+                        <option value="PUT">Lower</option>
+                        <option value="DIGITEVEN">Even</option>
+                        <option value="DIGITODD">Odd</option>
+                        <option value="DIGITOVER">Over</option>
+                        <option value="DIGITUNDER">Under</option>
+                    </select>
+
+                    <label for="duration">Duration (seconds):</label>
+                    <input type="number" id="duration" value="60" min="5" max="3600">
+
+                    <label for="stake">Initial Stake:</label>
+                    <input type="number" id="stake" value="1" min="0.35" step="0.01">
+
+                    <label for="custom-strategy-rules">Custom Strategy Rules (JSON):</label>
+                    <textarea id="custom-strategy-rules" placeholder='[{"indicator":"rsi","operator":"<","value":30},{"indicator":"macd","operator":">","value":0}]'></textarea>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="multi-timeframe" checked>
+                        <label for="multi-timeframe">Enable Multi-Timeframe Analysis</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="dynamic-switching" checked>
+                        <label for="dynamic-switching">Enable Dynamic Strategy Switching</label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Risk Management Panel -->
+            <div class="panel risk-panel">
+                <h3><i class="fas fa-shield-alt"></i> Risk Management</h3>
+                <div class="risk-section">
+                    <label for="max-loss">Max Loss Limit ($):</label>
+                    <input type="number" id="max-loss" value="50" min="1" step="0.01">
+
+                    <label for="max-profit">Max Profit Target ($):</label>
+                    <input type="number" id="max-profit" value="100" min="1" step="0.01">
+
+                    <label for="max-trades">Max Trades per Session:</label>
+                    <input type="number" id="max-trades" value="50" min="1">
+
+                    <label for="multiplier">Loss Multiplier:</label>
+                    <input type="number" id="multiplier" value="2.1" min="1" step="0.1">
+
+                    <label for="max-drawdown">Max Drawdown (%):</label>
+                    <input type="number" id="max-drawdown" value="20" min="1" max="100" step="0.1">
+
+                    <label for="max-consecutive-losses">Max Consecutive Losses:</label>
+                    <input type="number" id="max-consecutive-losses" value="5" min="1">
+
+                    <label for="cooldown-period">Cooldown Period (ms):</label>
+                    <input type="number" id="cooldown-period" value="300000" min="60000" step="1000">
+
+                    <label for="position-sizing">Position Sizing Method:</label>
+                    <select id="position-sizing">
+                        <option value="kelly">Kelly Criterion</option>
+                        <option value="fixed">Fixed Fractional</option>
+                        <option value="volatility">Volatility-Adjusted</option>
+                    </select>
+
+                    <label for="fixed-fraction">Fixed Fraction (%):</label>
+                    <input type="number" id="fixed-fraction" value="0.02" min="0.01" max="0.1" step="0.01">
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="stop-loss-enabled" checked>
+                        <label for="stop-loss-enabled">Enable Stop Loss</label>
+                    </div>
+
+                    <div class="checkbox-group">
+                        <input type="checkbox" id="take-profit-enabled" checked>
+                        <label for="take-profit-enabled">Enable Take Profit</label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="panel control-panel">
+                <h3><i class="fas fa-play-circle"></i> Bot Control</h3>
+                <div class="control-section">
+                    <button id="start-btn" class="success-btn">
+                        <i class="fas fa-play"></i> Start Bot
+                    </button>
+                    <button id="stop-btn" class="danger-btn" disabled>
+                        <i class="fas fa-stop"></i> Stop Bot
+                    </button>
+                    <button id="reset-btn" class="secondary-btn">
+                        <i class="fas fa-redo"></i> Reset Stats
+                    </button>
+                    <button id="backtest-btn" class="secondary-btn">
+                        <i class="fas fa-history"></i> Run Backtest
+                    </button>
+                </div>
+            </div>
+
+            <!-- Statistics Panel -->
+            <div class="panel stats-panel">
+                <h3><i class="fas fa-chart-bar"></i> Trading Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-label">Total Trades:</span>
+                        <span class="stat-value" id="total-trades">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Wins:</span>
+                        <span class="stat-value" id="wins">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Losses:</span>
+                        <span class="stat-value" id="losses">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Win Rate:</span>
+                        <span class="stat-value" id="win-rate">0%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Current Streak:</span>
+                        <span class="stat-value" id="current-streak">0</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Total P&L:</span>
+                        <span class="stat-value" id="total-pnl">$0.00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Balance:</span>
+                        <span class="stat-value" id="balance">$0.00</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Last Trade:</span>
+                        <span class="stat-value" id="last-trade">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Market Data Panel -->
+            <div class="panel market-panel">
+                <h3><i class="fas fa-chart-area"></i> Market Data</h3>
+                <div class="market-section">
+                    <div class="price-display">
+                        <span class="price-label">Current Price:</span>
+                        <span class="price-value" id="current-price">-</span>
+                    </div>
+                    <div class="indicators">
+                        <div class="indicator">
+                            <span class="indicator-label">RSI:</span>
+                            <span class="indicator-value" id="rsi-value">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">MA (10):</span>
+                            <span class="indicator-value" id="ma-value">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Volatility:</span>
+                            <span class="indicator-value" id="volatility-value">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Bollinger Upper:</span>
+                            <span class="indicator-value" id="bollinger-upper">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Bollinger Middle:</span>
+                            <span class="indicator-value" id="bollinger-middle">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Bollinger Lower:</span>
+                            <span class="indicator-value" id="bollinger-lower">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">MACD Line:</span>
+                            <span class="indicator-value" id="macd-line">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">MACD Signal:</span>
+                            <span class="indicator-value" id="macd-signal">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">MACD Histogram:</span>
+                            <span class="indicator-value" id="macd-histogram">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Stochastic %K:</span>
+                            <span class="indicator-value" id="stochastic-k">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Stochastic %D:</span>
+                            <span class="indicator-value" id="stochastic-d">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">ADX:</span>
+                            <span class="indicator-value" id="adx-value">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">OBV:</span>
+                            <span class="indicator-value" id="obv-value">-</span>
+                        </div>
+                        <div class="indicator">
+                            <span class="indicator-label">Sentiment Score:</span>
+                            <span class="indicator-value" id="sentiment-value">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Log Panel -->
+            <div class="panel log-panel">
+                <h3><i class="fas fa-list"></i> Trading Log</h3>
+                <div class="log-container">
+                    <div id="log-content"></div>
+                </div>
+                <button id="clear-log" class="secondary-btn">
+                    <i class="fas fa-trash"></i> Clear Log
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
