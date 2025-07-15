@@ -61,7 +61,8 @@ class AdvancedDerivBot {
             fixedFraction: 0.02, // 2% of balance
             customStrategyRules: [], // Custom indicator rules
             useMultiTimeframe: true,
-            useDynamicSwitching: true
+            useDynamicSwitching: true,
+            trailingProfitThreshold: 0.5 // 50% of stake for dynamic exit
         };
 
         // Trading state management
@@ -74,6 +75,17 @@ class AdvancedDerivBot {
         this.isPaused = false;
         this.historicalData = []; // For backtesting
         this.symbolData = new Map(); // Multi-symbol data
+        this.correlations = new Map(); // Symbol correlations
+        this.strategyStats = {}; // Per-strategy performance
+        this.pauseExtensions = 0; // Track cooldown extensions
+        this.maxPauseExtensions = 3; // Max extensions before forced resume
+
+        // Economic calendar (mocked for high-impact events)
+        this.newsEvents = [
+            { hour: 12, minute: 30, duration: 15, description: 'US Non-Farm Payrolls' }, // 12:30-12:45 UTC
+            { hour: 14, minute: 0, duration: 10, description: 'US CPI Release' }, // 14:00-14:10 UTC
+            { hour: 8, minute: 30, duration: 15, description: 'EU ECB Rate Decision' } // 8:30-8:45 UTC
+        ];
 
         this.init();
     }
@@ -140,7 +152,7 @@ class AdvancedDerivBot {
         try {
             this.config.strategy = getValue('strategy-select');
             this.config.symbols = getValue('symbols');
-            this.config.symbol = this.config.symbols[0] || 'R_10'; // Default to first symbol
+            this.config.symbol = this.config.symbols[0] || 'R_10';
             this.config.tradeType = getValue('trade-type');
             this.config.duration = getValue('duration', 'integer');
             this.config.maxLoss = getValue('max-loss', 'number');
@@ -158,10 +170,11 @@ class AdvancedDerivBot {
             this.config.useMultiTimeframe = getValue('multi-timeframe', 'boolean');
             this.config.useDynamicSwitching = getValue('dynamic-switching', 'boolean');
 
-            this.initialStake = getValue('stake', 'number');
+            this.initialStake = parseFloat(getValue('stake', 'number').toFixed(1));
             this.currentStake = this.initialStake;
 
             this.log(`Configuration updated: ${this.config.strategy} strategy on ${this.config.symbols.join(', ')}`, 'info');
+            this.calculateSymbolCorrelations();
         } catch (error) {
             this.log(`Configuration error: Invalid JSON in custom strategy rules - ${error.message}`, 'error');
         }
@@ -251,7 +264,14 @@ class AdvancedDerivBot {
      */
     handleMessage(data) {
         if (data.error) {
-            this.log(`API Error: ${data.error.message} (req_id: ${data.req_id || 'unknown'})`, 'error');
+            const errorMsg = `API Error: ${data.error.message} (code: ${data.error.code}, req_id: ${data.req_id || 'unknown'})`;
+            this.log(errorMsg, 'error');
+            if (data.error.code === 'InvalidStake') {
+                this.adjustStakeForRetry();
+            } else if (data.error.code === 'RateLimit') {
+                this.log('Rate limit hit; retrying after delay', 'warning');
+                setTimeout(() => this.processQueue(), 1000);
+            }
             return;
         }
 
@@ -280,6 +300,15 @@ class AdvancedDerivBot {
     }
 
     /**
+     * Adjust stake and retry if API rejects due to invalid stake
+     */
+    adjustStakeForRetry() {
+        this.currentStake = parseFloat(Math.max(0.60, this.currentStake - 0.1).toFixed(1));
+        this.log(`Retrying with adjusted stake: $${this.currentStake}`, 'warning');
+        this.executeTrade(this.config.tradeType, this.config.symbol);
+    }
+
+    /**
      * Process market tick data
      * @param {Object} tick - Tick data from API
      */
@@ -292,11 +321,12 @@ class AdvancedDerivBot {
         symbolData.tickHistory.push({
             time: new Date(tick.epoch * 1000),
             price: this.currentPrice,
-            volume: tick.volume || 0 // Assuming Deriv provides volume
+            volume: tick.volume || this.estimateVolume(this.currentPrice, symbolData.priceHistory)
         });
 
         if (symbolData.priceHistory.length > 100) {
             symbolData.priceHistory.shift();
+            symbolData.tickHistory.shift();
         }
 
         if (symbol === this.config.symbol) {
@@ -314,10 +344,25 @@ class AdvancedDerivBot {
     }
 
     /**
+     * Estimate volume when Deriv API doesn't provide it
+     * @param {number} currentPrice - Current price
+     * @param {number[]} priceHistory - Price history
+     * @returns {number} Estimated volume
+     */
+    estimateVolume(currentPrice, priceHistory) {
+        if (priceHistory.length < 2) return 1;
+        const priceChange = Math.abs(currentPrice - priceHistory[priceHistory.length - 2]);
+        return Math.max(1, Math.round(priceChange * 1000));
+    }
+
+    /**
      * Calculate technical indicators
      */
     calculateIndicators() {
-        if (this.priceHistory.length < 26) return;
+        if (this.priceHistory.length < 26) {
+            this.log('Insufficient data for indicator calculations', 'warning');
+            return;
+        }
 
         this.rsi = this.calculateRSI(this.priceHistory, 14);
         this.movingAverage = this.calculateMA(this.priceHistory, 10);
@@ -328,6 +373,8 @@ class AdvancedDerivBot {
         this.adx = this.calculateADX(this.priceHistory, 14);
         this.obv = this.calculateOBV(this.tickHistory);
         this.sentiment = this.calculateSentiment();
+
+        this.log(`Indicators updated: RSI=${this.rsi.toFixed(2)}, Volatility=${this.volatility.toFixed(2)}%, OBV=${this.obv}`, 'debug');
     }
 
     /**
@@ -347,9 +394,7 @@ class AdvancedDerivBot {
         }
 
         const avgGain = gains / period;
-        const avgLoss = losses / period;
-
-        if (avgLoss === 0) return 100;
+        const avgLoss = losses / period || 0.0001;
 
         const rs = avgGain / avgLoss;
         return 100 - (100 / (1 + rs));
@@ -367,21 +412,21 @@ class AdvancedDerivBot {
     }
 
     /**
-     * Calculate market volatility
+     * Calculate market volatility (standard deviation of log returns)
      * @param {number[]} prices - Price history
      * @returns {number} Volatility percentage
      */
     calculateVolatility(prices) {
-        if (prices.length < 2) return 0;
+        if (prices.length < 20) return 0;
 
-        const returns = prices.slice(1).map((price, i) => 
-            (price - prices[i]) / prices[i]);
+        const logReturns = prices.slice(1).map((price, i) => 
+            Math.log(price / prices[i]) || 0);
 
-        const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
-        const variance = returns.reduce((sum, ret) => 
-            sum + Math.pow(ret - mean, 2), 0) / returns.length;
-
-        return Math.sqrt(variance) * 100;
+        const mean = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
+        const variance = logReturns.reduce((sum, ret) => 
+            sum + Math.pow(ret - mean, 2), 0) / (logReturns.length - 1);
+        
+        return Math.sqrt(variance) * 100 * Math.sqrt(252);
     }
 
     /**
@@ -460,7 +505,7 @@ class AdvancedDerivBot {
             const highest = Math.max(...slice);
             const lowest = Math.min(...slice);
             const current = prices[prices.length - 1];
-            return ((current - lowest) / (highest - lowest)) * 100;
+            return ((current - lowest) / (highest - lowest || 0.0001)) * 100;
         };
 
         const kValues = Array(kSlowing).fill().map((_, i) => {
@@ -468,7 +513,7 @@ class AdvancedDerivBot {
             const highest = Math.max(...subSlice.slice(-kPeriod));
             const lowest = Math.min(...subSlice.slice(-kPeriod));
             const current = subSlice[subSlice.length - 1];
-            return ((current - lowest) / (highest - lowest)) * 100;
+            return ((current - lowest) / (highest - lowest || 0.0001)) * 100;
         });
 
         const k = this.calculateMA(kValues, kSlowing);
@@ -479,7 +524,7 @@ class AdvancedDerivBot {
                 const highest = Math.max(...subSubSlice.slice(-kPeriod));
                 const lowest = Math.min(...subSubSlice.slice(-kPeriod));
                 const current = subSubSlice[subSubSlice.length - 1];
-                return ((current - lowest) / (highest - lowest)) * 100;
+                return ((current - lowest) / (highest - lowest || 0.0001)) * 100;
             });
             return this.calculateMA(kSubValues, kSlowing);
         });
@@ -510,9 +555,9 @@ class AdvancedDerivBot {
             trSum += Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
         }
 
-        const plusDI = (plusDM / trSum) * 100;
-        const minusDI = (minusDM / trSum) * 100;
-        const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
+        const plusDI = (plusDM / (trSum || 0.0001)) * 100;
+        const minusDI = (minusDM / (trSum || 0.0001)) * 100;
+        const dx = Math.abs(plusDI - minusDI) / ((plusDI + minusDI) || 0.0001) * 100;
         return dx;
     }
 
@@ -522,24 +567,158 @@ class AdvancedDerivBot {
      * @returns {number} OBV value
      */
     calculateOBV(ticks) {
-        if (ticks.length < 2 || !ticks[0].volume) return 0;
+        if (ticks.length < 2) return 0;
 
         let obv = 0;
         for (let i = 1; i < ticks.length; i++) {
             const priceChange = ticks[i].price - ticks[i - 1].price;
-            obv += priceChange > 0 ? ticks[i].volume :
-                   priceChange < 0 ? -ticks[i].volume : 0;
+            const volume = ticks[i].volume || this.estimateVolume(ticks[i].price, ticks.map(t => t.price));
+            if (!ticks[i].volume) {
+                this.log('Volume data unavailable; using estimated volume for OBV', 'warning');
+            }
+            obv += priceChange > 0 ? volume : priceChange < 0 ? -volume : 0;
         }
         return obv;
     }
 
     /**
-     * Calculate market sentiment (mock implementation)
+     * Calculate market sentiment (placeholder for external API)
      * @returns {number} Sentiment score (-1 to 1)
      */
     calculateSentiment() {
-        // Mock implementation; replace with real API call (e.g., Alpha Vantage)
-        return Math.random() * 2 - 1; // Random sentiment score between -1 and 1
+        const sentiment = this.rsi < 30 ? 0.5 : this.rsi > 70 ? -0.5 : 0;
+        this.log('Using mock sentiment; integrate external API for production', 'warning');
+        return sentiment;
+    }
+
+    /**
+     * Calculate correlation between symbols for diversification
+     */
+    calculateSymbolCorrelations() {
+        if (this.config.symbols.length < 2) return;
+
+        this.correlations.clear();
+        for (let i = 0; i < this.config.symbols.length; i++) {
+            for (let j = i + 1; j < this.config.symbols.length; j++) {
+                const sym1 = this.config.symbols[i];
+                const sym2 = this.config.symbols[j];
+                const prices1 = this.symbolData.get(sym1)?.priceHistory.slice(-50) || [];
+                const prices2 = this.symbolData.get(sym2)?.priceHistory.slice(-50) || [];
+
+                if (prices1.length < 50 || prices2.length < 50) continue;
+
+                const mean1 = prices1.reduce((a, b) => a + b, 0) / prices1.length;
+                const mean2 = prices2.reduce((a, b) => a + b, 0) / prices2.length;
+
+                let cov = 0, std1 = 0, std2 = 0;
+                for (let k = 0; k < prices1.length; k++) {
+                    cov += (prices1[k] - mean1) * (prices2[k] - mean2);
+                    std1 += Math.pow(prices1[k] - mean1, 2);
+                    std2 += Math.pow(prices2[k] - mean2, 2);
+                }
+
+                const correlation = cov / (Math.sqrt(std1) * Math.sqrt(std2) || 0.0001);
+                this.correlations.set(`${sym1}-${sym2}`, correlation);
+                this.log(`Correlation ${sym1}-${sym2}: ${correlation.toFixed(2)}`, 'debug');
+            }
+        }
+    }
+
+    /**
+     * Check market conditions for news and volatility spikes
+     * @returns {boolean} Whether conditions are unfavorable
+     */
+    checkMarketConditions() {
+        const now = new Date();
+        const hour = now.getUTCHours();
+        const minute = now.getUTCMinutes();
+
+        // Check economic calendar events
+        const isNewsEvent = this.newsEvents.some(event => {
+            const startTime = event.hour * 60 + event.minute;
+            const endTime = startTime + event.duration;
+            const currentTime = hour * 60 + minute;
+            return currentTime >= startTime && currentTime <= endTime;
+        });
+
+        if (isNewsEvent) {
+            const event = this.newsEvents.find(event => {
+                const startTime = event.hour * 60 + event.minute;
+                const endTime = startTime + event.duration;
+                const currentTime = hour * 60 + minute;
+                return currentTime >= startTime && currentTime <= endTime;
+            });
+            this.log(`Avoiding trade during ${event.description}`, 'warning');
+            return true;
+        }
+
+        // Check for volatility spikes
+        if (this.detectVolatilitySpike()) {
+            this.log('Avoiding trade due to volatility spike', 'warning');
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Detect volatility spikes (e.g., >3% price move in 5 ticks)
+     * @returns {boolean} Whether a volatility spike is detected
+     */
+    detectVolatilitySpike() {
+        if (this.priceHistory.length < 5) return false;
+        const recentPrices = this.priceHistory.slice(-5);
+        const maxMove = Math.max(...recentPrices) - Math.min(...recentPrices);
+        const movePercent = maxMove / recentPrices[0] * 100;
+        return movePercent > 3;
+    }
+
+    /**
+     * Update strategy performance statistics
+     * @param {string} strategy - Strategy name
+     * @param {string} result - Trade result (win/loss)
+     */
+    updateStrategyStats(strategy, result) {
+        if (!this.strategyStats[strategy]) {
+            this.strategyStats[strategy] = { wins: 0, losses: 0, recentTrades: [] };
+        }
+        this.strategyStats[strategy][result === 'win' ? 'wins' : 'losses']++;
+        this.strategyStats[strategy].recentTrades.push(result);
+        if (this.strategyStats[strategy].recentTrades.length > 20) {
+            this.strategyStats[strategy].recentTrades.shift();
+        }
+    }
+
+    /**
+     * Select the best strategy based on historical performance
+     * @returns {string} Best strategy
+     */
+    selectBestStrategy() {
+        const strategies = ['martingale', 'dalembert', 'trend-follow', 'mean-reversion', 'rsi-strategy', 'grid', 'ml-based', 'custom'];
+        let bestStrategy = this.config.strategy;
+        let bestScore = -Infinity;
+
+        strategies.forEach(strategy => {
+            const stats = this.strategyStats[strategy] || { wins: 0, losses: 0, recentTrades: [] };
+            const totalTrades = stats.wins + stats.losses;
+            if (totalTrades < 10) return;
+
+            // Weighted win rate: recent trades count 2x
+            const recentWins = stats.recentTrades.filter(r => r === 'win').length;
+            const recentWeight = 2;
+            const winRate = ((stats.wins + recentWins * recentWeight) / (totalTrades + stats.recentTrades.length * recentWeight)) * 100;
+
+            if (winRate > bestScore) {
+                bestScore = winRate;
+                bestStrategy = strategy;
+            }
+        });
+
+        if (bestStrategy !== this.config.strategy && bestScore > 40) {
+            this.log(`Switching to better strategy: ${bestStrategy} (Win rate: ${bestScore.toFixed(1)}%)`, 'info');
+            return bestStrategy;
+        }
+        return this.config.strategy;
     }
 
     /**
@@ -551,32 +730,106 @@ class AdvancedDerivBot {
 
         const signal = this.getTradeSignal(symbol);
         if (signal.shouldTrade) {
-            this.executeTrade(signal.tradeType, symbol);
+            const correlatedSignal = this.getCorrelatedSignal(symbol, signal.tradeType);
+            if (correlatedSignal.shouldTrade) {
+                this.executeTrade(signal.tradeType, symbol);
+            } else {
+                this.log(`Trade skipped due to lack of correlated confirmation for ${symbol}`, 'warning');
+            }
         }
     }
 
     /**
-     * Get trading signal based on selected strategy
+     * Get correlated signal from other symbols
+     * @param {string} symbol - Primary symbol
+     * @param {string} tradeType - Trade type
+     * @returns {Object} Correlated signal
+     */
+    getCorrelatedSignal(symbol, tradeType) {
+        if (this.config.symbols.length < 2) return { shouldTrade: true };
+
+        const correlatedSymbol = this.config.symbols.find(sym => sym !== symbol);
+        if (!correlatedSymbol) return { shouldTrade: true };
+
+        const correlation = this.correlations.get(`${symbol}-${correlatedSymbol}`) || 0;
+        if (Math.abs(correlation) > 0.9) {
+            this.log(`High correlation (${correlation.toFixed(2)}) with ${correlatedSymbol}; skipping trade`, 'warning');
+            return { shouldTrade: false };
+        }
+
+        if (Math.abs(correlation) > 0.8) {
+            const prices = this.symbolData.get(correlatedSymbol)?.priceHistory.slice(-3) || [];
+            if (prices.length < 3) return { shouldTrade: true };
+
+            const isTrending = prices.every((p, i, arr) => i === 0 || (tradeType === 'CALL' ? p > arr[i - 1] : p < arr[i - 1]));
+            if (isTrending) {
+                this.log(`Correlated ${tradeType} movement in ${correlatedSymbol} (correlation: ${correlation.toFixed(2)})`, 'debug');
+                return { shouldTrade: true };
+            }
+            return { shouldTrade: false };
+        }
+
+        return { shouldTrade: true };
+    }
+
+    /**
+     * Get trading signal based on selected strategy with confirmation
      * @param {string} symbol - Market symbol
      * @returns {Object} Trading signal
      */
     getTradeSignal(symbol) {
         if (this.config.useDynamicSwitching) {
-            this.config.strategy = this.determineOptimalStrategy();
+            this.config.strategy = this.selectBestStrategy();
         }
 
-        switch (this.config.strategy) {
-            case 'martingale': return this.getMartingaleSignal();
-            case 'dalembert': return this.getDalembertSignal();
-            case 'trend-follow': return this.getTrendFollowSignal();
-            case 'mean-reversion': return this.getMeanReversionSignal();
-            case 'rsi-strategy': return this.getRSISignal();
-            case 'grid': return this.getGridSignal(symbol);
-            case 'arbitrage': return this.getArbitrageSignal();
-            case 'ml-based': return this.getMLBasedSignal();
-            case 'custom': return this.getCustomSignal();
-            default: return { shouldTrade: false, tradeType: 'CALL' };
+        const signal = (() => {
+            switch (this.config.strategy) {
+                case 'martingale': return this.getMartingaleSignal();
+                case 'dalembert': return this.getDalembertSignal();
+                case 'trend-follow': return this.getTrendFollowSignal();
+                case 'mean-reversion': return this.getMeanReversionSignal();
+                case 'rsi-strategy': return this.getRSISignal();
+                case 'grid': return this.getGridSignal(symbol);
+                case 'arbitrage': return this.getArbitrageSignal();
+                case 'ml-based': return this.getMLBasedSignal();
+                case 'custom': return this.getCustomSignal();
+                default: return { shouldTrade: false, tradeType: 'CALL' };
+            }
+        })();
+
+        if (signal.shouldTrade) {
+            signal.shouldTrade = this.confirmSignal(signal.tradeType);
         }
+
+        return signal;
+    }
+
+    /**
+     * Confirm trade signal with multiple indicators
+     * @param {string} tradeType - Trade type (CALL/PUT)
+     * @returns {boolean} Whether signal is confirmed
+     */
+    confirmSignal(tradeType) {
+        let confirmations = 0;
+        const requiredConfirmations = 2;
+
+        if ((tradeType === 'CALL' && this.rsi < 30) || (tradeType === 'PUT' && this.rsi > 70)) {
+            confirmations++;
+        }
+
+        if ((tradeType === 'CALL' && this.macd.histogram > 0) || (tradeType === 'PUT' && this.macd.histogram < 0)) {
+            confirmations++;
+        }
+
+        if ((tradeType === 'CALL' && this.stochastic.k < 20) || (tradeType === 'PUT' && this.stochastic.k > 80)) {
+            confirmations++;
+        }
+
+        if ((tradeType === 'CALL' && this.sentiment > 0.2) || (tradeType === 'PUT' && this.sentiment < -0.2)) {
+            confirmations++;
+        }
+
+        return confirmations >= requiredConfirmations;
     }
 
     /**
@@ -584,10 +837,12 @@ class AdvancedDerivBot {
      * @returns {string} Optimal strategy
      */
     determineOptimalStrategy() {
-        if (this.adx > 25) return 'trend-follow'; // Strong trend
-        if (this.volatility < 0.5) return 'grid'; // Low volatility
-        if (this.rsi > 70 || this.rsi < 30) return 'rsi-strategy'; // Overbought/oversold
-        return 'mean-reversion'; // Default for sideways markets
+        const bandWidth = (this.bollingerBands.upper - this.bollingerBands.lower) / this.bollingerBands.middle * 100;
+        
+        if (this.adx > 25 && bandWidth > 5) return 'trend-follow';
+        if (this.volatility < 1 && bandWidth < 3) return 'grid';
+        if (this.rsi > 70 || this.rsi < 30) return 'rsi-strategy';
+        return 'mean-reversion';
     }
 
     /**
@@ -615,7 +870,7 @@ class AdvancedDerivBot {
 
         const shortMA = this.config.useMultiTimeframe ? this.calculateMA(this.priceHistory, 5) : this.movingAverage;
         return {
-            shouldTrade: true,
+            shouldTrade: this.adx > 20,
             tradeType: this.currentPrice > shortMA ? 'CALL' : 'PUT'
         };
     }
@@ -630,7 +885,7 @@ class AdvancedDerivBot {
         const longMA = this.config.useMultiTimeframe ? this.calculateMA(this.priceHistory, 20) : this.movingAverage;
         const deviation = Math.abs(this.currentPrice - longMA) / longMA * 100;
 
-        if (deviation > this.volatility * 1.5) {
+        if (deviation > this.volatility * 1.5 && this.adx < 20) {
             return {
                 shouldTrade: true,
                 tradeType: this.currentPrice > longMA ? 'PUT' : 'CALL'
@@ -646,15 +901,10 @@ class AdvancedDerivBot {
     getRSISignal() {
         if (this.rsi === 0) return { shouldTrade: false };
 
-        const isMACDConfirm = this.macd.histogram > 0 ? 'CALL' : 'PUT';
-        const isStochasticConfirm = this.stochastic.k < 20 ? 'CALL' : this.stochastic.k > 80 ? 'PUT' : null;
-
-        if (this.rsi > 70 && isMACDConfirm === 'PUT' && isStochasticConfirm === 'PUT') {
-            return { shouldTrade: true, tradeType: 'PUT' };
-        } else if (this.rsi < 30 && isMACDConfirm === 'CALL' && isStochasticConfirm === 'CALL') {
-            return { shouldTrade: true, tradeType: 'CALL' };
-        }
-        return { shouldTrade: false };
+        return {
+            shouldTrade: (this.rsi > 70 || this.rsi < 30),
+            tradeType: this.rsi > 70 ? 'PUT' : 'CALL'
+        };
     }
 
     /**
@@ -663,8 +913,8 @@ class AdvancedDerivBot {
      * @returns {Object} Trading signal
      */
     getGridSignal(symbol) {
-        const levels = 5; // Number of grid levels
-        const gridSize = this.volatility * 0.01; // Grid size based on volatility
+        const levels = 5;
+        const gridSize = this.volatility * 0.01;
         const currentPrice = this.currentPrice;
         const middlePrice = this.bollingerBands.middle;
 
@@ -672,7 +922,7 @@ class AdvancedDerivBot {
         if (Math.abs(gridLevel) > levels) return { shouldTrade: false };
 
         return {
-            shouldTrade: true,
+            shouldTrade: this.volatility < 2,
             tradeType: gridLevel > 0 ? 'PUT' : 'CALL'
         };
     }
@@ -686,11 +936,22 @@ class AdvancedDerivBot {
 
         const symbol1 = this.config.symbols[0];
         const symbol2 = this.config.symbols[1];
-        const price1 = this.symbolData.get(symbol1)?.priceHistory.slice(-1)[0] || 0;
-        const price2 = this.symbolData.get(symbol2)?.priceHistory.slice(-1)[0] || 0;
+        const prices1 = this.symbolData.get(symbol1)?.priceHistory.slice(-50) || [];
+        const prices2 = this.symbolData.get(symbol2)?.priceHistory.slice(-50) || [];
 
+        if (prices1.length < 50 || prices2.length < 50) return { shouldTrade: false };
+
+        const correlation = this.correlations.get(`${symbol1}-${symbol2}`) || 0;
+        if (Math.abs(correlation) > 0.8) {
+            this.log(`High correlation (${correlation.toFixed(2)}) between ${symbol1} and ${symbol2}; skipping arbitrage`, 'warning');
+            return { shouldTrade: false };
+        }
+
+        const price1 = prices1[prices1.length - 1];
+        const price2 = prices2[prices2.length - 1];
         const spread = Math.abs(price1 - price2) / Math.min(price1, price2);
-        if (spread > 0.01) { // 1% spread threshold
+
+        if (spread > 0.01) {
             return {
                 shouldTrade: true,
                 tradeType: price1 > price2 ? 'PUT' : 'CALL',
@@ -707,13 +968,12 @@ class AdvancedDerivBot {
     getMLBasedSignal() {
         if (this.historicalData.length < 50) return { shouldTrade: false };
 
-        // Simple decision tree: Buy if recent wins > losses and RSI < 40
         const recentTrades = this.historicalData.slice(-10);
         const winCount = recentTrades.filter(t => t.result === 'win').length;
         const lossCount = recentTrades.filter(t => t.result === 'loss').length;
 
         return {
-            shouldTrade: winCount > lossCount && this.rsi < 40,
+            shouldTrade: winCount > lossCount && this.rsi < 40 && this.sentiment > 0,
             tradeType: 'CALL'
         };
     }
@@ -736,6 +996,8 @@ class AdvancedDerivBot {
                 case 'bollinger':
                     return rule.operator === '>' ? this.currentPrice > this.bollingerBands.upper :
                            rule.operator === '<' ? this.currentPrice < this.bollingerBands.lower : false;
+                case 'adx':
+                    return rule.operator === '>' ? this.adx > rule.value : this.adx < rule.value;
                 default:
                     return false;
             }
@@ -752,38 +1014,42 @@ class AdvancedDerivBot {
      */
     adjustStakeBasedOnStrategy() {
         if (this.lastTradeResult === null) {
-            this.currentStake = this.initialStake;
+            this.currentStake = parseFloat(this.initialStake.toFixed(1));
             return;
         }
 
+        const drawdown = this.balance > 0 ? (this.totalPnL / this.balance) * 100 : 0;
+        const volatilityFactor = this.volatility > 2.5 ? 0.5 : 1;
+        const drawdownFactor = drawdown < -10 ? 0.75 : 1;
+
         switch (this.config.positionSizing) {
             case 'fixed':
-                this.currentStake = this.balance * this.config.fixedFraction;
+                this.currentStake = this.balance * this.config.fixedFraction * volatilityFactor * drawdownFactor;
                 break;
             case 'volatility':
-                this.currentStake = this.initialStake / (1 + this.volatility / 100);
+                this.currentStake = this.initialStake / (1 + this.volatility / 100) * volatilityFactor * drawdownFactor;
                 break;
             case 'kelly':
             default:
-                this.currentStake = this.calculateOptimalStake();
+                this.currentStake = this.calculateOptimalStake() * volatilityFactor * drawdownFactor;
         }
 
         switch (this.config.strategy) {
             case 'martingale':
                 this.currentStake = this.lastTradeResult === 'loss' ?
-                    Math.round(this.currentStake * this.config.multiplier * 100) / 100 :
+                    parseFloat((this.currentStake * this.config.multiplier).toFixed(1)) :
                     this.initialStake;
                 break;
             case 'dalembert':
                 this.currentStake = this.lastTradeResult === 'loss' ?
-                    Math.round((this.currentStake + this.initialStake) * 100) / 100 :
-                    Math.max(this.initialStake, 
-                        Math.round((this.currentStake - this.initialStake) * 100) / 100);
+                    parseFloat((this.currentStake + this.initialStake).toFixed(1)) :
+                    parseFloat(Math.max(this.initialStake, this.currentStake - this.initialStake).toFixed(1));
                 break;
         }
 
-        this.currentStake = Math.min(this.currentStake, this.balance * 0.1, 100);
-        this.currentStake = Math.max(this.currentStake, 0.35);
+        this.currentStake = parseFloat(Math.min(this.currentStake, this.balance * 0.1, 100).toFixed(1));
+        this.currentStake = parseFloat(Math.max(this.currentStake, 0.35).toFixed(1));
+        this.log(`Adjusted stake: $${this.currentStake} (Volatility: ${this.volatility.toFixed(2)}%, Drawdown: ${drawdown.toFixed(2)}%)`, 'debug');
     }
 
     /**
@@ -818,6 +1084,11 @@ class AdvancedDerivBot {
      * @returns {boolean} Whether trade should be executed
      */
     shouldExecuteTrade() {
+        if (this.checkMarketConditions()) {
+            this.adaptiveCooldown();
+            return false;
+        }
+
         if (this.totalTrades >= this.config.maxTrades) {
             this.log('Maximum trades reached for this session', 'warning');
             this.stopTrading();
@@ -845,18 +1116,20 @@ class AdvancedDerivBot {
         const drawdown = this.balance > 0 ? (this.totalPnL / this.balance) * 100 : 0;
         if (drawdown <= -this.config.maxDrawdown) {
             this.log('Maximum drawdown reached', 'warning');
-            this.pauseTrading();
+            this.adaptiveCooldown();
             return false;
         }
 
         if (this.consecutiveLosses >= this.config.maxConsecutiveLosses) {
             this.log('Maximum consecutive losses reached', 'warning');
-            this.pauseTrading();
+            this.adaptiveCooldown();
             return false;
         }
 
-        if (this.isHighVolatility() || this.isLowLiquidityPeriod()) {
-            this.log('Trading paused due to unfavorable market conditions', 'warning');
+        const bandWidth = (this.bollingerBands.upper - this.bollingerBands.lower) / this.bollingerBands.middle * 100;
+        if (bandWidth > 10) {
+            this.log('Trading paused due to wide Bollinger Bands', 'warning');
+            this.adaptiveCooldown();
             return false;
         }
 
@@ -864,36 +1137,56 @@ class AdvancedDerivBot {
     }
 
     /**
-     * Check for high volatility conditions
-     * @returns {boolean} Whether market is highly volatile
+     * Adaptive cooldown logic based on market conditions
      */
-    isHighVolatility() {
-        return this.volatility > 2 * this.calculateMA(this.priceHistory.slice(-20).map((_, i) => 
-            this.calculateVolatility(this.priceHistory.slice(0, this.priceHistory.length - 20 + i + 1)), 20));
+    adaptiveCooldown() {
+        if (this.pauseExtensions >= this.maxPauseExtensions) {
+            this.log('Maximum pause extensions reached; resuming trading', 'info');
+            this.isPaused = false;
+            this.consecutiveLosses = 0;
+            this.pauseExtensions = 0;
+            return;
+        }
+
+        const currentTrend = this.detectMarketTrend();
+        const isUnfavorable = currentTrend === 'sideways' || this.volatility > 2.5 || this.adx > 25;
+
+        if (isUnfavorable) {
+            this.isPaused = true;
+            this.pauseExtensions++;
+            this.log(`Paused due to unfavorable conditions (Trend: ${currentTrend}, Volatility: ${this.volatility.toFixed(2)}%, ADX: ${this.adx.toFixed(2)})`, 'warning');
+            setTimeout(() => {
+                if (this.isTrading && !this.checkMarketConditions() && this.detectMarketTrend() !== 'sideways' && this.volatility <= 2.5 && this.adx <= 25) {
+                    this.isPaused = false;
+                    this.consecutiveLosses = 0;
+                    this.pauseExtensions = 0;
+                    this.log('Resuming after adaptive cooldown', 'info');
+                } else {
+                    this.log('Extending cooldown due to persistent unfavorable conditions', 'warning');
+                    this.adaptiveCooldown();
+                }
+            }, this.config.cooldownPeriod);
+        }
     }
 
     /**
-     * Check for low liquidity periods (e.g., specific hours)
-     * @returns {boolean} Whether current time is low liquidity
+     * Check for dynamic exit conditions
+     * @param {Object} contract - Contract update data
+     * @returns {boolean} Whether to exit early
      */
-    isLowLiquidityPeriod() {
-        const hour = new Date().getUTCHours();
-        return hour >= 22 || hour <= 2; // Low liquidity between 10 PM and 2 AM UTC
-    }
+    checkDynamicExit(contract) {
+        if (!contract.profit || !contract.current_spot) return false;
 
-    /**
-     * Pause trading temporarily
-     */
-    pauseTrading() {
-        this.isPaused = true;
-        this.log('Trading paused due to risk management rules', 'warning');
-        setTimeout(() => {
-            if (this.isTrading && !this.isHighVolatility() && !this.isLowLiquidityPeriod()) {
-                this.isPaused = false;
-                this.consecutiveLosses = 0;
-                this.log('Trading resumed after cooldown', 'info');
-            }
-        }, this.config.cooldownPeriod);
+        const profitRatio = contract.profit / this.currentStake;
+        const isReversing = (contract.current_spot > this.bollingerBands.upper && this.macd.histogram < 0) ||
+                           (contract.current_spot < this.bollingerBands.lower && this.macd.histogram > 0);
+
+        if (profitRatio > this.config.trailingProfitThreshold && isReversing) {
+            this.log(`Triggering early exit to lock profit: $${contract.profit.toFixed(2)}`, 'info');
+            this.sendMessage({ sell: contract.contract_id, price: contract.current_spot, req_id: this.generateReqId() });
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -944,6 +1237,10 @@ class AdvancedDerivBot {
     handleContractUpdate(contract) {
         if (!this.activeContract) return;
 
+        if (this.config.takeProfitEnabled && this.checkDynamicExit(contract)) {
+            return;
+        }
+
         const isWin = contract.is_sold && parseFloat(contract.sell_price) > parseFloat(contract.buy_price);
         const pnl = contract.is_sold ? 
             parseFloat(contract.sell_price) - parseFloat(contract.buy_price) : 0;
@@ -964,14 +1261,16 @@ class AdvancedDerivBot {
                 this.lastTradeResult = 'loss';
                 this.consecutiveLosses++;
                 this.log(`Trade LOST: -$${Math.abs(pnl).toFixed(2)}`, 'error');
+                this.adaptiveCooldown();
             }
 
+            this.updateStrategyStats(this.config.strategy, this.lastTradeResult);
             this.historicalData.push({
                 result: this.lastTradeResult,
                 pnl,
                 symbol: this.activeContract.symbol,
                 timestamp: new Date(),
-                price: this.currentPrice // Add price for backtesting
+                price: this.currentPrice
             });
 
             this.activeContract = null;
@@ -994,16 +1293,21 @@ class AdvancedDerivBot {
         let simulatedWins = 0;
 
         this.historicalData.forEach((tick, i) => {
-            if (i < 26) return; // Skip initial data for indicator calculation
+            if (i < 26) return;
             this.priceHistory = this.historicalData.slice(0, i + 1).map(t => t.price);
+            this.tickHistory = this.historicalData.slice(0, i + 1).map(t => ({
+                price: t.price,
+                volume: this.estimateVolume(t.price, this.priceHistory)
+            }));
             this.calculateIndicators();
             const signal = this.getTradeSignal(this.config.symbol);
             if (signal.shouldTrade) {
                 simulatedTrades++;
-                // Simulate trade outcome (simplified)
-                const outcome = Math.random() > 0.5 ? 'win' : 'loss';
-                const simulatedStake = this.calculateOptimalStake();
-                const profit = outcome === 'win' ? simulatedStake * 0.85 : -simulatedStake;
+                const slippage = this.volatility * 0.01;
+                const fee = this.currentStake * 0.01;
+                const outcome = this.simulateTradeOutcome(signal.tradeType, this.priceHistory, i);
+                const simulatedStake = parseFloat(this.calculateOptimalStake().toFixed(1));
+                const profit = outcome === 'win' ? simulatedStake * 0.85 - fee : -simulatedStake - fee;
                 simulatedPnL += profit;
                 if (outcome === 'win') simulatedWins++;
                 this.log(`Backtest trade: ${signal.tradeType} - ${outcome}, P&L: $${profit.toFixed(2)}`, 'info');
@@ -1012,6 +1316,21 @@ class AdvancedDerivBot {
 
         const winRate = simulatedTrades > 0 ? (simulatedWins / simulatedTrades * 100).toFixed(1) : 0;
         this.log(`Backtest completed: ${simulatedTrades} trades, ${winRate}% win rate, P&L: $${simulatedPnL.toFixed(2)}`, 'success');
+    }
+
+    /**
+     * Simulate trade outcome for backtesting
+     * @param {string} tradeType - Trade type
+     * @param {number[]} prices - Price history
+     * @param {number} index - Current index
+     * @returns {string} Outcome (win/loss)
+     */
+    simulateTradeOutcome(tradeType, prices, index) {
+        if (index >= prices.length - 1) return 'loss';
+        const futurePrice = prices[index + 1];
+        const currentPrice = prices[index];
+        return (tradeType === 'CALL' && futurePrice > currentPrice) ||
+               (tradeType === 'PUT' && futurePrice < currentPrice) ? 'win' : 'loss';
     }
 
     /**
@@ -1030,6 +1349,7 @@ class AdvancedDerivBot {
 
         this.isTrading = true;
         this.isPaused = false;
+        this.pauseExtensions = 0;
         this.updateConfig();
 
         document.getElementById('start-btn').disabled = true;
@@ -1045,6 +1365,7 @@ class AdvancedDerivBot {
     stopTrading() {
         this.isTrading = false;
         this.isPaused = false;
+        this.pauseExtensions = 0;
         document.getElementById('start-btn').disabled = false;
         document.getElementById('stop-btn').disabled = true;
 
@@ -1062,10 +1383,12 @@ class AdvancedDerivBot {
         this.losses = 0;
         this.currentStreak = 0;
         this.totalPnL = 0;
-        this.currentStake = this.initialStake;
+        this.currentStake = parseFloat(this.initialStake.toFixed(1));
         this.lastTradeResult = null;
         this.consecutiveLosses = 0;
         this.historicalData = [];
+        this.strategyStats = {};
+        this.pauseExtensions = 0;
 
         this.updateUI();
         this.log('Statistics reset', 'info');
@@ -1252,7 +1575,7 @@ class AdvancedDerivBot {
         const avgLoss = this.losses > 0 ? Math.abs(this.totalPnL) / this.losses : 1;
 
         const kellyFraction = (winRate * avgWin - (1 - winRate) * avgLoss) / avgWin;
-        return Math.max(0.35, Math.min(this.balance * kellyFraction * 0.1, 10));
+        return parseFloat(Math.max(0.35, Math.min(this.balance * kellyFraction * 0.1, 10)).toFixed(1));
     }
 
     /**
@@ -1282,13 +1605,25 @@ class AdvancedDerivBot {
         const metrics = this.getPerformanceMetrics();
 
         if (this.totalTrades > 20) {
+            const stats = this.strategyStats[this.config.strategy] || { wins: 0, losses: 0 };
+            const totalTrades = stats.wins + stats.losses;
+            const winRate = totalTrades > 0 ? (stats.wins / totalTrades * 100) : 0;
+
+            if (winRate < 40 && totalTrades >= 20) {
+                const newStrategy = this.selectBestStrategy();
+                if (newStrategy !== this.config.strategy) {
+                    this.config.strategy = newStrategy;
+                    document.getElementById('strategy-select').value = newStrategy;
+                }
+            }
+
             if (metrics.winRate < 0.4) {
                 this.config.multiplier = Math.min(this.config.multiplier * 1.1, 3);
-                this.config.maxLoss *= 1.1; // Increase stop-loss tolerance
+                this.config.maxLoss *= 1.1;
                 this.log(`Adjusted multiplier to ${this.config.multiplier.toFixed(2)}, max loss to $${this.config.maxLoss.toFixed(2)}`, 'info');
             } else if (metrics.winRate > 0.6) {
                 this.config.multiplier = Math.max(this.config.multiplier * 0.9, 1.5);
-                this.config.maxLoss *= 0.9; // Tighten stop-loss
+                this.config.maxLoss *= 0.9;
                 this.log(`Adjusted multiplier to ${this.config.multiplier.toFixed(2)}, max loss to $${this.config.maxLoss.toFixed(2)}`, 'info');
             }
         }
