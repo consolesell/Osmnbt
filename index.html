@@ -58,7 +58,7 @@
                     <div class="form-group">
                         <label for="symbols">Symbols:</label>
                         <select id="symbols" multiple>
-                            <option value="R_10">Volatility 10</option>
+                            <option value="R_10" selected>Volatility 10</option>
                             <option value="R_25">Volatility 25</option>
                             <option value="R_50">Volatility 50</option>
                             <option value="R_75">Volatility 75</option>
@@ -124,11 +124,23 @@
                         <label for="custom-strategy-rules">Custom Strategy Rules (JSON):</label>
                         <textarea id="custom-strategy-rules" rows="4">[]</textarea>
                     </div>
+                    <div class="form-group">
+                        <label for="candle-timeframe">Candle Timeframe (seconds):</label>
+                        <input type="number" id="candle-timeframe" value="60" min="1" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label for="chart-type">Chart Type:</label>
+                        <select id="chart-type">
+                            <option value="line">Line</option>
+                            <option value="candlestick">Candlestick</option>
+                        </select>
+                    </div>
                     <div class="form-group checkbox-group">
                         <label><input type="checkbox" id="stop-loss-enabled" checked> Enable Stop Loss</label>
                         <label><input type="checkbox" id="take-profit-enabled" checked> Enable Take Profit</label>
                         <label><input type="checkbox" id="multi-timeframe" checked> Use Multi-Timeframe</label>
                         <label><input type="checkbox" id="dynamic-switching" checked> Dynamic Strategy Switching</label>
+                        <label><input type="checkbox" id="use-candle-patterns" checked> Use Candle Patterns</label>
                     </div>
                     <div class="button-group">
                         <button id="start-btn" class="btn primary">Start Trading</button>
@@ -136,6 +148,7 @@
                         <button id="reset-btn" class="btn secondary">Reset Stats</button>
                         <button id="backtest-btn" class="btn secondary">Run Backtest</button>
                         <button id="reset-config-btn" class="btn secondary">Reset Config</button>
+                        <button id="reset-chart-btn" class="btn secondary">Reset Chart</button>
                     </div>
                 </section>
             </details>
@@ -146,76 +159,96 @@
                 <section class="card">
                     <canvas id="price-chart" height="200"></canvas>
                     <div class="stats-grid">
-                        <div class="stat">
+                        <div class="stat" title="Latest tick price">
                             <span class="stat-label">Current Price:</span>
                             <span id="current-price" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Current market volatility">
                             <span class="stat-label">Volatility:</span>
                             <span id="volatility-value" class="stat-value">0.00%</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Detected market trend">
                             <span class="stat-label">Market Trend:</span>
                             <span id="market-trend" class="stat-value">Sideways</span>
+                        </div>
+                        <div class="stat" title="Detected candlestick pattern">
+                            <span class="stat-label">Candle Pattern:</span>
+                            <span id="candle-pattern" class="stat-value">None</span>
+                        </div>
+                        <div class="stat" title="Candle open price">
+                            <span class="stat-label">Candle Open:</span>
+                            <span id="candle-open" class="stat-value">-</span>
+                        </div>
+                        <div class="stat" title="Candle high price">
+                            <span class="stat-label">Candle High:</span>
+                            <span id="candle-high" class="stat-value">-</span>
+                        </div>
+                        <div class="stat" title="Candle low price">
+                            <span class="stat-label">Candle Low:</span>
+                            <span id="candle-low" class="stat-value">-</span>
+                        </div>
+                        <div class="stat" title="Candle close price">
+                            <span class="stat-label">Candle Close:</span>
+                            <span id="candle-close" class="stat-value">-</span>
                         </div>
                     </div>
                 </section>
             </details>
 
-            <!-- Indicators -->
+            <!-- Technical Indicators -->
             <details>
                 <summary>Technical Indicators</summary>
                 <section class="card">
                     <div class="stats-grid">
-                        <div class="stat">
+                        <div class="stat" title="Relative Strength Index">
                             <span class="stat-label">RSI:</span>
                             <span id="rsi-value" class="stat-value">0.00</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Moving Average (20-period)">
                             <span class="stat-label">Moving Average:</span>
                             <span id="ma-value" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Bollinger Bands Upper">
                             <span class="stat-label">Bollinger Upper:</span>
                             <span id="bollinger-upper" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Bollinger Bands Middle">
                             <span class="stat-label">Bollinger Middle:</span>
                             <span id="bollinger-middle" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Bollinger Bands Lower">
                             <span class="stat-label">Bollinger Lower:</span>
                             <span id="bollinger-lower" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="MACD Line">
                             <span class="stat-label">MACD Line:</span>
                             <span id="macd-line" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="MACD Signal Line">
                             <span class="stat-label">MACD Signal:</span>
                             <span id="macd-signal" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="MACD Histogram">
                             <span class="stat-label">MACD Histogram:</span>
                             <span id="macd-histogram" class="stat-value">0.00000</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Stochastic %K">
                             <span class="stat-label">Stochastic %K:</span>
                             <span id="stochastic-k" class="stat-value">0.00</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Stochastic %D">
                             <span class="stat-label">Stochastic %D:</span>
                             <span id="stochastic-d" class="stat-value">0.00</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Average Directional Index">
                             <span class="stat-label">ADX:</span>
                             <span id="adx-value" class="stat-value">0.00</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="On-Balance Volume">
                             <span class="stat-label">OBV:</span>
                             <span id="obv-value" class="stat-value">0.00</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Market Sentiment">
                             <span class="stat-label">Sentiment:</span>
                             <span id="sentiment-value" class="stat-value">0.00</span>
                         </div>
@@ -287,13 +320,17 @@
                 <summary>Market Conditions</summary>
                 <section class="card">
                     <div class="stats-grid">
-                        <div class="stat">
+                        <div class="stat" title="Current economic news event">
                             <span class="stat-label">News Event:</span>
                             <span id="news-event" class="stat-value">None</span>
                         </div>
-                        <div class="stat">
+                        <div class="stat" title="Volatility spike detection">
                             <span class="stat-label">Volatility Spike:</span>
                             <span id="volatility-spike" class="stat-value">No</span>
+                        </div>
+                        <div class="stat" title="Volatility trend direction">
+                            <span class="stat-label">Volatility Trend:</span>
+                            <span id="volatility-trend" class="stat-value">Stable</span>
                         </div>
                     </div>
                     <table id="correlation-table">
@@ -331,36 +368,53 @@
         </main>
     </div>
 
-    <script src="script.js"></script>
+    <script type="module" src="js/candles.js"></script>
+    <script type="module" src="js/indicators.js"></script>
+    <script type="module" src="js/script.js"></script>
     <script>
         // Initialize Chart.js
+        let chartType = document.getElementById('chart-type')?.value || 'line';
         const ctx = document.getElementById('price-chart').getContext('2d');
         const priceChart = new Chart(ctx, {
-            type: 'line',
+            type: chartType,
             data: {
                 labels: [],
-                datasets: [
-                    {
-                        label: 'Price',
-                        data: [],
-                        borderColor: 'var(--chart-color)',
-                        tension: 0.1
-                    }
-                ]
+                datasets: chartType === 'candlestick' ? [{
+                    label: 'Price',
+                    data: [],
+                    borderColor: 'var(--chart-color)',
+                    backgroundColor: (ctx) => ctx.raw && ctx.raw.y[3] >= ctx.raw.y[0] ? 'rgba(40, 167, 69, 0.5)' : 'rgba(220, 53, 69, 0.5)'
+                }] : [{
+                    label: 'Price',
+                    data: [],
+                    borderColor: 'var(--chart-color)',
+                    tension: 0.1
+                }]
             },
             options: {
                 responsive: true,
                 scales: {
-                    x: { display: true, title: { display: true, text: 'Time' } },
-                    y: { display: true, title: { display: true, text: 'Price' } }
+                    x: { display: true, title: { display: true, text: 'Time', color: 'var(--text-color)' } },
+                    y: { display: true, title: { display: true, text: 'Price', color: 'var(--text-color)' } }
                 }
             }
         });
 
-        // Update chart with price data
-        function updatePriceChart(price, timestamp) {
-            priceChart.data.labels.push(new Date(timestamp).toLocaleTimeString());
-            priceChart.data.datasets[0].data.push(price);
+        // Update chart with candle data
+        function updatePriceChart(candles, symbol) {
+            if (!candles || !candles.length) return;
+            const candle = candles.find(c => c.symbol === symbol) || candles[candles.length - 1];
+            const timestamp = new Date(candle.timestamp).toLocaleTimeString();
+            if (chartType === 'candlestick') {
+                priceChart.data.labels.push(timestamp);
+                priceChart.data.datasets[0].data.push({
+                    x: timestamp,
+                    y: [candle.open, candle.high, candle.low, candle.close]
+                });
+            } else {
+                priceChart.data.labels.push(timestamp);
+                priceChart.data.datasets[0].data.push(candle.close);
+            }
             if (priceChart.data.labels.length > 50) {
                 priceChart.data.labels.shift();
                 priceChart.data.datasets[0].data.shift();
@@ -368,50 +422,34 @@
             priceChart.update();
         }
 
-        // Override bot's updateUI to include chart and new sections
-        const originalUpdateUI = window.derivBot.updateUI;
-        window.derivBot.updateUI = function() {
-            originalUpdateUI.call(this);
-            updatePriceChart(this.currentPrice, Date.now());
-            document.getElementById('market-trend').textContent = this.detectMarketTrend();
-            document.getElementById('news-event').textContent = this.checkMarketConditions() ? 
-                (this.newsEvents.find(e => {
-                    const now = new Date();
-                    const currentTime = now.getUTCHours() * 60 + now.getUTCMinutes();
-                    const startTime = e.hour * 60 + e.minute;
-                    const endTime = startTime + e.duration;
-                    return currentTime >= startTime && currentTime <= endTime;
-                })?.description || 'Active') : 'None';
-            document.getElementById('volatility-spike').textContent = this.detectVolatilitySpike() ? 'Yes' : 'No';
+        // Reset chart
+        document.getElementById('reset-chart-btn')?.addEventListener('click', () => {
+            priceChart.data.labels = [];
+            priceChart.data.datasets[0].data = [];
+            priceChart.update();
+            window.derivBot.log('Chart reset', 'info');
+        });
 
-            // Update strategy stats table
-            const strategyBody = document.getElementById('strategy-stats-body');
-            strategyBody.innerHTML = '';
-            Object.entries(this.strategyStats).forEach(([strategy, stats]) => {
-                const total = stats.wins + stats.losses;
-                const winRate = total > 0 ? (stats.wins / total * 100).toFixed(1) : 0;
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${strategy}</td>
-                    <td>${stats.wins}</td>
-                    <td>${stats.losses}</td>
-                    <td>${winRate}%</td>
-                `;
-                strategyBody.appendChild(row);
-            });
-
-            // Update correlation table
-            const correlationBody = document.getElementById('correlation-body');
-            correlationBody.innerHTML = '';
-            this.correlations.forEach((value, pair) => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${pair}</td>
-                    <td>${value.toFixed(2)}</td>
-                `;
-                correlationBody.appendChild(row);
-            });
-        };
+        // Chart type toggle
+        document.getElementById('chart-type')?.addEventListener('change', (e) => {
+            chartType = e.target.value;
+            priceChart.config.type = chartType;
+            priceChart.data.datasets = chartType === 'candlestick' ? [{
+                label: 'Price',
+                data: [],
+                borderColor: 'var(--chart-color)',
+                backgroundColor: (ctx) => ctx.raw && ctx.raw.y[3] >= ctx.raw.y[0] ? 'rgba(40, 167, 69, 0.5)' : 'rgba(220, 53, 69, 0.5)'
+            }] : [{
+                label: 'Price',
+                data: [],
+                borderColor: 'var(--chart-color)',
+                tension: 0.1
+            }];
+            priceChart.update();
+            window.derivBot.log(`Chart type changed to ${chartType}`, 'info');
+            const candles = window.derivBot.candleManager.getCandles(window.derivBot.config.symbol);
+            candles.forEach(candle => updatePriceChart([candle], window.derivBot.config.symbol));
+        });
 
         // Theme toggle
         document.getElementById('theme-toggle').addEventListener('click', () => {
@@ -469,10 +507,13 @@
                 'position-sizing': 'kelly',
                 'fixed-fraction': 0.02,
                 'custom-strategy-rules': '[]',
+                'candle-timeframe': 60,
+                'chart-type': 'line',
                 'stop-loss-enabled': true,
                 'take-profit-enabled': true,
                 'multi-timeframe': true,
-                'dynamic-switching': true
+                'dynamic-switching': true,
+                'use-candle-patterns': true
             };
 
             Object.entries(defaults).forEach(([id, value]) => {

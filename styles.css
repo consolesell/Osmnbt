@@ -219,6 +219,23 @@ summary:hover {
     align-items: center;
     padding: 10px;
     border-bottom: 1px solid var(--border-color);
+    position: relative;
+}
+
+.stat:hover::after {
+    content: attr(title);
+    position: absolute;
+    top: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--card-background);
+    color: var(--text-color);
+    padding: 5px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    z-index: 10;
 }
 
 .stat-label {
